@@ -4,11 +4,42 @@ services:
     environment:
       POSTGRES_DB: valtiera
       POSTGRES_USER: valtiera
-      POSTGRES_PASSWORD: change-me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-me}
     ports: ["5432:5432"]
     volumes: ["valtiera_pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U valtiera -d valtiera"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/valtiera
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      ALLOW_DEMO_SEED: "true"
+      VALTIERA_SECRET: ${VALTIERA_SECRET:-local-compose-secret-change-me}
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    depends_on:
+      api:
+        condition: service_healthy
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/valtiera
+      WORKER_POLL_SECONDS: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
 volumes:
   valtiera_pg:
