@@ -30,16 +30,18 @@ describe('VALTIERA workspace',()=>{
    }));
  });
 
- it('explains the product and presents all six research engines',async()=>{
+ it('shows the workspace command center and all six research engines',async()=>{
    render(<App/>);
-   expect(await screen.findByText(/Markets move on inefficiencies/)).toBeInTheDocument();
+   expect(await screen.findByRole('heading',{name:'Workspace overview'})).toBeInTheDocument();
+   expect(screen.getByText('MARKET DATA')).toBeInTheDocument();
+   expect(screen.getByText('Provider not configured')).toBeInTheDocument();
    expect(screen.getAllByText(/Statistical Arbitrage/).length).toBeGreaterThan(0);
    expect(screen.getByText(/Mean Reversion/)).toBeInTheDocument();
    expect(screen.getByText(/Volatility & Options/)).toBeInTheDocument();
    expect(screen.getByText(/Cross-Asset Relative Value/)).toBeInTheDocument();
    expect(screen.getByText(/Momentum & Trend/)).toBeInTheDocument();
    expect(screen.getByText(/Market Regime/)).toBeInTheDocument();
-   expect(screen.getByText(/MARKET DATA UNAVAILABLE/)).toBeInTheDocument();
+   expect(screen.getAllByText('DISABLED').length).toBeGreaterThan(0);
  });
 
  it('opens the community feed with demo transparency',async()=>{
