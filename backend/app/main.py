@@ -28,6 +28,8 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 logger=logging.getLogger("valtiera.api")
 
 def initialize_storage():
+    if os.getenv("VERCEL") == "1" and DATABASE_URL.startswith("sqlite"):
+        raise RuntimeError("DATABASE_URL must be set to persistent PostgreSQL for Vercel deployments")
     if not DATABASE_URL.startswith("sqlite") and not os.getenv("VALTIERA_SECRET"):
         raise RuntimeError("VALTIERA_SECRET must be configured for non-development deployments")
     Base.metadata.create_all(bind=engine)
