@@ -17,8 +17,21 @@
 ## Vercel frontend
 
 - Framework: Vite; build command `npm run build`; output directory `dist`.
-- Configure `VITE_MARKET_DATA_API_URL` to the separately hosted API origin.
+- In Vercel Project Settings → Environment Variables, set `VITE_MARKET_DATA_API_URL` to the deployed API origin (for example `https://valtiera-api.onrender.com`) for Production and Preview, then redeploy. Vite embeds this value at build time.
+- The production client no longer falls back to `127.0.0.1`; API-backed features show a configuration error if the API URL is missing.
 - Never set private API keys as `VITE_*` variables.
+
+## FastAPI API and worker on Render
+
+The root `render.yaml` defines a Docker web service for FastAPI and a background worker for research jobs. In Render, create a Blueprint from this repository and fill in the prompted environment values:
+
+1. Create a Supabase project. Copy its Session Pooler connection string for the persistent Render services. Use `postgresql://` or `postgres://`; the backend converts it to the installed psycopg 3 driver URL.
+2. Set `DATABASE_URL` for both Render services. Set `CORS_ORIGINS` on the API service to the exact Vercel production origin, such as `https://your-project.vercel.app`.
+3. Keep the generated `VALTIERA_SECRET`. Add optional provider keys in the Render dashboard only if those feeds are enabled.
+4. In the Render API service shell, run `alembic upgrade head` from the service's `/srv/valtiera` working directory when applying database migrations.
+5. Copy the API service HTTPS URL into Vercel as `VITE_MARKET_DATA_API_URL`, then redeploy the Vercel frontend.
+
+The API and worker need a persistent host for the existing job poller and Python market WebSocket. This repository does not include a Supabase database password, Render account, or Vercel environment values, so those must be entered in their respective dashboards.
 
 ## Backend hosting and readiness
 

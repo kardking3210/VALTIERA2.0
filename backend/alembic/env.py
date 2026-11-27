@@ -4,12 +4,12 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app.db import Base
+from app.db import Base, DATABASE_URL
 from app import models
 
 config=context.config
 if config.config_file_name: fileConfig(config.config_file_name)
-url=os.getenv("DATABASE_URL",config.get_main_option("sqlalchemy.url"))
+url=DATABASE_URL
 config.set_main_option("sqlalchemy.url",url.replace("%","%%"))
 target_metadata=Base.metadata
 
