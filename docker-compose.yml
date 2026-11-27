@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: valtiera
       POSTGRES_USER: valtiera
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the local environment file}
     ports: ["5432:5432"]
     volumes: ["valtiera_pg:/var/lib/postgresql/data"]
     healthcheck:
@@ -15,14 +15,33 @@ services:
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the local environment file}@postgres:5432/valtiera
+    depends_on:
+      postgres:
+        condition: service_healthy
   api:
     build: ./backend
     environment:
-      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/valtiera
+      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the local environment file}@postgres:5432/valtiera
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
-      ALLOW_DEMO_SEED: "true"
-      VALTIERA_SECRET: ${VALTIERA_SECRET:-local-compose-secret-change-me}
+      VALTIERA_SECRET: ${VALTIERA_SECRET:?Set VALTIERA_SECRET in the local environment file}
+      ALPACA_PAPER_TRADING_ENABLED: ${ALPACA_PAPER_TRADING_ENABLED:-false}
+      ALPACA_PAPER_API_KEY: ${ALPACA_PAPER_API_KEY:-}
+      ALPACA_PAPER_SECRET_KEY: ${ALPACA_PAPER_SECRET_KEY:-}
+      ALPACA_PAPER_OWNER_EMAIL: ${ALPACA_PAPER_OWNER_EMAIL:-}
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      FMP_API_KEY: ${FMP_API_KEY:-}
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
@@ -30,16 +49,20 @@ services:
       timeout: 3s
       retries: 12
     depends_on:
-      api:
+      migrate:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
   worker:
     build: ./backend
     command: ["python", "-m", "app.worker"]
     environment:
-      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/valtiera
+      DATABASE_URL: postgresql+psycopg://valtiera:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the local environment file}@postgres:5432/valtiera
       WORKER_POLL_SECONDS: 2
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 volumes:
   valtiera_pg:

@@ -1,113 +1,32 @@
 # VALTIERA 2.0
 
-VALTIERA is a quantitative research workspace for studying market relationships, testing simple research rules on user-supplied historical prices, reviewing manual portfolios and discussing methodology. It does not execute trades, hold assets, supply licensed market data, or claim investment returns.
+VALTIERA is a local quantitative research terminal for market analysis, model calculations, historical simulation, risk review and simulated paper orders. Broker submission is restricted to Alpaca’s separate paper API. EVM native-token transfers can be sent only from a connected browser wallet after an explicit confirmation here and an approval in the wallet. VALTIERA never receives private keys. The local project is not deployed or pushed.
 
-## Run the full local stack
+## Local development
 
-Requirements: Node.js 20.19+ (or 22.12+), Python 3.11+, and optionally Docker Desktop.
+Frontend: `npm install` then `npm run dev` from the repository root.
 
-### Option A: local Python with SQLite
-
-Open three terminals from this repository:
-
-```powershell
-# Terminal 1: API and persistent local SQLite database
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
-
-# Terminal 2: durable background research-job worker
-cd backend
-.\.venv\Scripts\python.exe -m app.worker
-
-# Terminal 3: frontend
-npm install
-npm run dev
-```
-
-Open `http://127.0.0.1:5173`. API health and interactive docs are at `http://127.0.0.1:8000/health` and `http://127.0.0.1:8000/docs`. The default SQLite file is `backend/valtiera.db`. The frontend connects to the local API for product features. Chart display data remains visibly marked local simulation until a market data adapter is configured.
-
-Six fictional local profiles are seeded on first API startup. Use `maya@valtiera.demo` with password `Research-Demo-2026`, or any other profile listed at `/demo-users`. Change `DEMO_PASSWORD` before sharing a development environment. New accounts can also register from the sign-in form.
-
-### Option B: PostgreSQL, Redis, API, and worker with Docker
-
-```powershell
-docker compose up --build
-npm run dev
-```
-
-The compose stack serves the API on port 8000 and PostgreSQL/Redis on their local ports. Set `POSTGRES_PASSWORD` and `VALTIERA_SECRET` in a root `.env` file before using it beyond a local machine. The database volume persists between container restarts. The worker stores and processes durable engine jobs in PostgreSQL. Redis connectivity is monitored but is not currently used as the job queue.
+Backend: create a virtual environment in `backend`, install `backend/requirements.txt`, then run `uvicorn app.main:app --reload --port 8000` from `backend`. Set `VITE_MARKET_DATA_API_URL=http://127.0.0.1:8000` in root `.env.local` when using that port. Local SQLite is the default.
 
 ## Product areas
 
-- **Overview:** product explanation, six engine statuses, service health, market data and execution disclosures.
-- **Quant lab:** six independent input-driven calculations, interactive candlestick display, run history, and durable queued jobs.
-- **Backtesting:** chronological 70/30 holdout reporting, lagged signals, explicit fees, equity curve, volatility, Sharpe ratio and drawdown. Results are labeled historical simulations.
-- **Portfolio:** private manual position entry, cost basis, entered-price valuation, P&L, concentration and exposure checks.
-- **Risk intelligence:** persistent user limits for position size, drawdown, daily loss, gross exposure and portfolio NAV.
-- **Markets and data:** current API/database/Redis/worker/provider condition. A missing market provider returns HTTP 503 rather than a fake quote.
-- **Research network:** fictional demo participants, persistent posts and comments, optional polls and one saved vote per profile.
-- **Audit log:** selected account, model, risk, position, backtest and community operations.
+- **Markets:** large dark embedded interactive chart and a separate live crypto kline feed. The embedded chart has its own market-data permissions and may show delayed data depending on symbol/exchange.
+- **Models:** automatically load historical crypto candles; the sample and parameters remain editable. Closed Binance stream bars append to the active sample. Optional US equity history is available from Alpaca IEX with server-side credentials; the UI equity stream is 1-minute and does not represent consolidated tape coverage. Peer strategies need the peer series refreshed to retain alignment.
+- **Backtests:** lagged historical signals, chronological holdout and expanding-window parameter refit for supported directional models. User-entered fee, slippage, spread, impact and per-bar funding assumptions are applied. The engine has no venue depth model or licensed point-in-time data validation.
+- **Paper trading:** a per-user simulated $100,000 ledger, market/limit/stop orders, fee deductions, positions, cancellation and a local monitor that checks top-of-book depth every 10 seconds. Orders may partially fill up to observed visible size; this remains a simulation. This is still a simulation and not venue execution.
+- **Wallet architecture:** connect an injected EVM wallet and estimate native-token gas. Transfers can be submitted after a review step and the wallet extension’s confirmation prompt. Receipt status is polled from the wallet RPC. The app never has custody of keys. Solana/Base support is not implemented.
+- **Risk:** historical, sample-dependent metrics and manually entered portfolio exposures.
 
-## Six research engines
+## Data configuration
 
-1. **Statistical arbitrage:** Pearson and Spearman association, Engle–Granger test, fitted log-price residual spread, rolling Z-score and hedge ratio.
-2. **Momentum:** time-series log return and volatility-adjusted score.
-3. **Mean reversion:** rolling deviation, simple OLS reversion slope and estimated half-life.
-4. **Volatility and options:** realized volatility, optional IV/RV spread, Black–Scholes call baseline, delta, gamma and vega when required inputs are provided.
-5. **Cross-asset relative value:** aligned return correlation, relative return and basis.
-6. **Market regime:** volatility-threshold description.
+Binance public Spot history and WebSocket stream need no key. Alpaca equity history/stream requires backend-only `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` in the backend environment; its IEX feed is one exchange feed, not consolidated US equity coverage. Never put private provider keys in `VITE_*` variables.
 
-These are transparent research calculations with simplified assumptions. They do not include a complete Kalman pairs model, volatility surface, full Greeks, factor model, portfolio optimizer or production-grade regime classifier. Inputs are supplied by the user; the chart series never feed model calculations or backtests.
+The product identifies data source, timestamp and availability when the provider returns that metadata. It does not claim that an embedded chart is the same feed as model inputs. Market summary verdicts describe computed sample statistics and are not forecasts or trade instructions.
 
-Backtests enforce a one-observation signal lag and report a chronological holdout, but they are not a substitute for independent quantitative validation. They do not include survivorship-bias controls, corporate actions, borrow, funding, slippage models, realistic market calendars or parameter-selection embargoes. Never treat a simulation as verified performance.
+## Backtest limitations
 
-## API and persistence
+The walk-forward report chooses a bounded parameter grid using only prior folds, then measures the next chronological fold. This reduces direct look-ahead but does not address data snooping, timestamp gaps, stale quotes, survivorship, delisted symbols, corporate actions, taxes, liquidity, market impact calibration or exchange-specific costs. Entered costs are assumptions, not measured fills. Results are not live performance.
 
-- `POST /auth/register`, `POST /auth/login`, `GET /auth/me`
-- `GET /engines`, `POST /engines/{engine_name}/run`, `GET /engines/history`
-- `POST /jobs`, `GET /jobs/{job_id}` (requires the background worker to process queued jobs)
-- `POST /backtests`, `GET /backtests`
-- `GET/PUT /risk/settings`, `GET /risk/assessment`
-- `GET/POST /portfolio/positions`, `DELETE /portfolio/positions/{id}`
-- `GET/POST /community/posts`, comments and poll vote routes
-- `GET /audit`, `GET /events` (server-sent system status)
-- `GET /health`, `GET /market-data/candles` (503 until an authorized provider adapter exists)
+## Local deployment boundary
 
-SQLAlchemy persists account records, settings, positions, research executions, backtests, jobs, community content and activity. Local startup creates the SQLite schema. Alembic is configured for explicit environment migrations:
-
-```powershell
-cd backend
-.\.venv\Scripts\alembic.exe upgrade head
-.\.venv\Scripts\alembic.exe revision --autogenerate -m "describe schema change"
-```
-
-Authentication uses salted PBKDF2 password hashes and signed, expiring bearer tokens. Set a strong random `VALTIERA_SECRET`, `DATABASE_URL`, `CORS_ORIGINS`, and `ALLOW_DEMO_SEED=false` in production. Login rate limits are process-local and must be replaced by a shared limiter for a multi-instance production deployment. Database transport encryption, managed backups, secret rotation, formal role administration, and external audit immutability still need deployment-level work.
-
-## Tests and build
-
-```powershell
-# Python engine, storage, auth, backtest, risk, worker and community checks
-cd backend
-.\.venv\Scripts\python.exe -m pytest -q
-
-# Frontend type-check and production build
-cd ..
-npm run build
-```
-
-## Vercel deployment
-
-Use two Vercel projects connected to this repository:
-
-1. **Frontend project:** Root Directory is the repository root. `vercel.json` configures the Vite build (`npm run build`, output `dist`). Set `VITE_MARKET_DATA_API_URL` to the deployed API origin and redeploy.
-2. **API project:** Root Directory is `backend`. `backend/main.py` exports the FastAPI app; the Python runtime reads `backend/requirements.txt`. Set `DATABASE_URL` to managed PostgreSQL, a unique `VALTIERA_SECRET`, `CORS_ORIGINS` to the frontend production domain (and any preview domains), and `ALLOW_DEMO_SEED=false`. Never use SQLite for persistent production data.
-
-Vercel can host the static frontend and FastAPI application. The continuous worker should run as a separate worker service sharing the managed database; Vercel Functions are request-driven and do not provide a continuously running worker process. Configure licensed data provider credentials only on a server-side adapter once the company has an appropriate data agreement. The current candle route remains unavailable until that integration is built and validated.
-
-The supplied design brief references video/poster files but the pasted attachment contained no actual media URLs or files. The Overview therefore uses an original CSS orbital illustration; replace it with the approved VALTIERA media assets when they are available.
-
-## Risk and product disclosures
-
-All investments involve risk. Historical and simulated results do not predict future performance. Model outputs depend on input quality, assumptions and implementation limits. VALTIERA is a research product in development, not an investment adviser, licensed fund, broker, custodian or trading system.
+The frontend can build for Vercel, but no backend host is deployed and Vercel has not been verified. `docker-compose.yml` requires explicit `POSTGRES_PASSWORD` and `VALTIERA_SECRET`. Alpaca paper orders require `ALPACA_PAPER_TRADING_ENABLED=true`, a paper-only key pair and the matching `ALPACA_PAPER_OWNER_EMAIL` on the backend. The user requested local-only work; do not deploy or push.

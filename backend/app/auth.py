@@ -3,7 +3,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 from .db import get_db
-from .models import User
+from .models import RevokedSession, User
 
 SECRET = os.getenv("VALTIERA_SECRET", "local-development-secret-change-before-deploy").encode()
 bearer = HTTPBearer(auto_error=False)
@@ -31,7 +31,13 @@ def current_user(credentials: HTTPAuthorizationCredentials|None=Depends(bearer),
         if not hmac.compare_digest(signature,expected): raise ValueError()
         data=json.loads(base64.urlsafe_b64decode(payload+"="*(-len(payload)%4)))
         if data["exp"]<time.time(): raise ValueError()
+        if db.get(RevokedSession,hashlib.sha256(credentials.credentials.encode()).hexdigest()): raise ValueError()
     except Exception: raise HTTPException(401,"Invalid or expired session",headers={"WWW-Authenticate":"Bearer"})
     user=db.get(User,int(data["sub"]))
     if not user: raise HTTPException(401,"Invalid or expired session",headers={"WWW-Authenticate":"Bearer"})
     return user
+
+def optional_user(credentials: HTTPAuthorizationCredentials|None=Depends(bearer), db: Session=Depends(get_db)) -> User|None:
+    if not credentials: return None
+    try: return current_user(credentials,db)
+    except HTTPException: return None

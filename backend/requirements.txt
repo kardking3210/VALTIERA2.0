@@ -7,3 +7,5 @@ SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 alembic==1.14.0
 redis==5.2.1
+python-dotenv==1.0.1
+websockets>=13,<18

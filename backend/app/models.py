@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 from .db import Base
 
@@ -15,6 +15,13 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class RevokedSession(Base):
+    __tablename__ = "revoked_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 class EngineRun(Base):
     __tablename__ = "engine_runs"
@@ -34,6 +41,12 @@ class RiskSettings(Base):
     daily_loss_limit_pct: Mapped[float] = mapped_column(Float, default=2)
     max_gross_exposure_pct: Mapped[float] = mapped_column(Float, default=100)
     portfolio_nav: Mapped[float] = mapped_column(Float, default=100000)
+    risk_profile: Mapped[str] = mapped_column(String(20), default="moderate")
+    max_leverage_pct: Mapped[float] = mapped_column(Float, default=100)
+    asset_class_limits: Mapped[dict] = mapped_column(JSON, default=dict)
+    volatility_tolerance: Mapped[str] = mapped_column(String(20), default="moderate")
+    liquidity_floor_usd: Mapped[float] = mapped_column(Float, default=0)
+    investment_horizon_months: Mapped[int] = mapped_column(Integer, default=12)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 class Position(Base):
@@ -83,36 +96,29 @@ class AuditLog(Base):
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
-class Post(Base):
-    __tablename__ = "posts"
+class PaperAccount(Base):
+    __tablename__ = "paper_accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    cash: Mapped[float] = mapped_column(Float, default=100000)
+    positions: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+class PaperOrder(Base):
+    __tablename__ = "paper_orders"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    title: Mapped[str] = mapped_column(String(180))
-    body: Mapped[str] = mapped_column(Text)
-    topic: Mapped[str] = mapped_column(String(48), default="Research")
+    symbol: Mapped[str] = mapped_column(String(32))
+    asset_class: Mapped[str] = mapped_column(String(16), default="crypto")
+    side: Mapped[str] = mapped_column(String(8))
+    order_type: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[float] = mapped_column(Float)
+    filled_quantity: Mapped[float] = mapped_column(Float, default=0)
+    limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fee_bps: Mapped[float] = mapped_column(Float, default=10)
+    status: Mapped[str] = mapped_column(String(16), default="OPEN")
+    fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    average_fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fee: Mapped[float] = mapped_column(Float, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    comments: Mapped[list["Comment"]] = relationship(cascade="all, delete-orphan")
-
-class Comment(Base):
-    __tablename__ = "comments"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    body: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-
-class Poll(Base):
-    __tablename__ = "polls"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), unique=True)
-    question: Mapped[str] = mapped_column(String(240))
-    options: Mapped[list] = mapped_column(JSON)
-
-class PollVote(Base):
-    __tablename__ = "poll_votes"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id"), index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    option_index: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    __table_args__ = (UniqueConstraint("poll_id", "user_id", name="one_vote_per_user_poll"),)
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
