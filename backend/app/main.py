@@ -43,12 +43,14 @@ def initialize_storage():
 @asynccontextmanager
 async def lifespan(_app):
     initialize_storage()
-    monitor=asyncio.create_task(paper_order_monitor())
+    # Vercel functions are short-lived; background monitors must not be treated as durable.
+    monitor=None if os.getenv("VERCEL")=="1" else asyncio.create_task(paper_order_monitor())
     try: yield
     finally:
-        monitor.cancel()
-        try: await monitor
-        except asyncio.CancelledError: pass
+        if monitor:
+            monitor.cancel()
+            try: await monitor
+            except asyncio.CancelledError: pass
 
 app=FastAPI(title="VALTIERA Research API",version="1.0.0",description="Persistent quantitative research workspace. No investment execution is provided.",lifespan=lifespan)
 origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:5173,http://127.0.0.1:5173,http://localhost:5176,http://127.0.0.1:5176").split(",") if x.strip()]
@@ -153,7 +155,7 @@ def health(db: Session=Depends(get_db)):
             redis.Redis.from_url(redis_url,socket_connect_timeout=.3,socket_timeout=.3).ping(); redis_state="OPERATIONAL"
         except Exception: redis_state="OFFLINE"
     heartbeat=db.get(ServiceHeartbeat,"research-worker") if database=="OPERATIONAL" else None
-    worker_state="OFFLINE"
+    worker_state="SERVERLESS_INLINE" if os.getenv("VERCEL")=="1" else "OFFLINE"
     if heartbeat and heartbeat.checked_at:
         checked=heartbeat.checked_at if heartbeat.checked_at.tzinfo else heartbeat.checked_at.replace(tzinfo=timezone.utc)
         worker_state="OPERATIONAL" if (datetime.now(timezone.utc)-checked).total_seconds()<90 else "OFFLINE"
@@ -532,6 +534,12 @@ def engine_history(limit:int=Query(default=30,ge=1,le=100),user:User=Depends(cur
 @app.post("/jobs",status_code=202)
 def enqueue_research(request:JobRequest,user:User=Depends(current_user),db:Session=Depends(get_db)):
     if request.engine not in ENGINES: raise HTTPException(422,"A valid engine name is required")
+    if os.getenv("VERCEL")=="1":
+        try: result=calculate(request.engine,request.data,request.parameters)
+        except (ValueError,TypeError,OverflowError) as exc: raise HTTPException(422,str(exc)) from None
+        execution=EngineRun(user_id=user.id,engine=request.engine,model_version=result["model_version"],result=result)
+        db.add(execution); db.flush(); audit(db,user.id,"engine_calculated","engine",request.engine,{"model_version":result["model_version"],"mode":"SERVERLESS_INLINE"}); db.commit(); db.refresh(execution)
+        return {"job_id":None,"status":"COMPLETED","created_at":execution.created_at.isoformat(),"result":{**result,"execution_id":execution.id},"note":"Calculated inline in the serverless request."}
     job=ResearchJob(user_id=user.id,engine=request.engine,data=request.data,parameters=request.parameters)
     db.add(job); db.flush(); audit(db,user.id,"research_job_queued","job",job.id,{"engine":job.engine}); db.commit(); db.refresh(job)
     return {"job_id":job.id,"status":job.status,"created_at":job.created_at.isoformat(),"note":"A configured worker will process this durable job."}

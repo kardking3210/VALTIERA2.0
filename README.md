@@ -1,6 +1,6 @@
 # VALTIERA 2.0
 
-VALTIERA is a local quantitative research terminal for market analysis, model calculations, historical simulation, risk review and simulated paper orders. Broker submission is restricted to Alpaca’s separate paper API. EVM native-token transfers can be sent only from a connected browser wallet after an explicit confirmation here and an approval in the wallet. VALTIERA never receives private keys. The local project is not deployed or pushed.
+VALTIERA is a quantitative research terminal for market analysis, model calculations, historical simulation, risk review and simulated paper orders. Broker submission is restricted to Alpaca’s separate paper API. EVM native-token transfers can be sent only from a connected browser wallet after an explicit confirmation here and an approval in the wallet. VALTIERA never receives private keys. See `DEPLOYMENT_GUIDE.md` for the Vercel + Supabase setup.
 
 ## Local development
 
@@ -27,6 +27,6 @@ The product identifies data source, timestamp and availability when the provider
 
 The walk-forward report chooses a bounded parameter grid using only prior folds, then measures the next chronological fold. This reduces direct look-ahead but does not address data snooping, timestamp gaps, stale quotes, survivorship, delisted symbols, corporate actions, taxes, liquidity, market impact calibration or exchange-specific costs. Entered costs are assumptions, not measured fills. Results are not live performance.
 
-## Local deployment boundary
+## Deployment status
 
-The frontend can build for Vercel, but no backend host is deployed and Vercel has not been verified. `docker-compose.yml` requires explicit `POSTGRES_PASSWORD` and `VALTIERA_SECRET`. Alpaca paper orders require `ALPACA_PAPER_TRADING_ENABLED=true`, a paper-only key pair and the matching `ALPACA_PAPER_OWNER_EMAIL` on the backend. The user requested local-only work; do not deploy or push.
+The repository supports separate Vercel frontend and FastAPI projects backed by Supabase Postgres. Each project, its secrets, and the database URL must be configured in the service dashboards. The Vercel serverless deployment calculates queued research requests inline and does not run the persistent paper-order monitor. `docker-compose.yml` requires explicit `POSTGRES_PASSWORD` and `VALTIERA_SECRET`. Alpaca paper orders require `ALPACA_PAPER_TRADING_ENABLED=true`, a paper-only key pair and the matching `ALPACA_PAPER_OWNER_EMAIL` on the backend.
