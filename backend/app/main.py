@@ -45,6 +45,7 @@ app=FastAPI(title="VALTIERA Research API",version="1.0.0",description="Persisten
 origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:5173,http://127.0.0.1:5173,http://localhost:5176,http://127.0.0.1:5176").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=["GET","POST","PUT","DELETE"],allow_headers=["Content-Type","Authorization"])
 STARTED=datetime.now(timezone.utc); login_attempts={}; market_summary_attempts={}
+SERVICE_STATUS="PRODUCTION" if os.getenv("VERCEL")=="1" else "DEVELOPMENT"
 
 class RunRequest(BaseModel):
     data: dict
@@ -156,7 +157,7 @@ def health(db: Session=Depends(get_db)):
             latest[name]={"status":"CALCULATION AVAILABLE","last_successful_execution":row.created_at.isoformat() if row else None,"observations":row.result.get("observations") if row else None}
         failed=db.query(ResearchJob).filter_by(status="FAILED").order_by(ResearchJob.updated_at.desc()).first()
         latest_error={"message":failed.error,"at":failed.updated_at.isoformat()} if failed else None
-    return {"status":"DEVELOPMENT","database":database,"redis":redis_state,"worker":worker_state,"engines":latest or {e:{"status":"UNKNOWN"} for e in ENGINES},"started_at":STARTED.isoformat(),"latest_error":latest_error}
+    return {"status":SERVICE_STATUS,"database":database,"redis":redis_state,"worker":worker_state,"engines":latest or {e:{"status":"UNKNOWN"} for e in ENGINES},"started_at":STARTED.isoformat(),"latest_error":latest_error}
 
 @app.post("/auth/register",status_code=201)
 def register(request:RegisterRequest,db:Session=Depends(get_db)):
@@ -769,7 +770,7 @@ async def events():
         while True:
             try:
                 with SessionLocal() as db: payload={"type":"status_snapshot","at":datetime.now(timezone.utc).isoformat(),**health(db)}
-            except Exception as exc: payload={"type":"status_snapshot","at":datetime.now(timezone.utc).isoformat(),"status":"DEVELOPMENT","database":"OFFLINE","latest_error":{"message":str(exc)[:200]}}
+            except Exception as exc: payload={"type":"status_snapshot","at":datetime.now(timezone.utc).isoformat(),"status":SERVICE_STATUS,"database":"OFFLINE","latest_error":{"message":str(exc)[:200]}}
             yield "data: "+__import__("json").dumps(payload)+"\n\n"
             await asyncio.sleep(15)
     return StreamingResponse(stream(),media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
