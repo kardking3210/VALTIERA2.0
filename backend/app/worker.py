@@ -2,7 +2,7 @@
 import logging, os, time
 from datetime import datetime, timezone
 from sqlalchemy import select
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, initialize_storage
 from .engines.core import calculate
 from .models import EngineRun, ResearchJob, ServiceHeartbeat
 
@@ -29,7 +29,7 @@ def process_one(db):
     job.updated_at=datetime.now(timezone.utc); db.commit(); return True
 
 def run_forever():
-    Base.metadata.create_all(bind=engine)
+    initialize_storage(Base)
     logger.info("VALTIERA research worker starting")
     while True:
         try:

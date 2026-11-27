@@ -13,10 +13,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 import websockets
-from sqlalchemy import func, text, inspect
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 from .auth import bearer, current_user, hash_password, issue_token, verify_password
-from .db import Base, DATABASE_URL, SessionLocal, engine, get_db
+from .db import Base, SessionLocal, get_db, initialize_storage as initialize_database
 from .engines.core import calculate, ENGINES, _exponential, _garch_fit, _wilder_rsi
 from .data.providers.binance import fetch_candles, latest_quote, top_of_book as binance_book
 from .data.providers import alpaca as alpaca_provider
@@ -28,20 +28,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 logger=logging.getLogger("valtiera.api")
 
 def initialize_storage():
-    if os.getenv("VERCEL") == "1" and DATABASE_URL.startswith("sqlite"):
-        raise RuntimeError("DATABASE_URL must be set to persistent PostgreSQL for Vercel deployments")
-    if not DATABASE_URL.startswith("sqlite") and not os.getenv("VALTIERA_SECRET"):
-        raise RuntimeError("VALTIERA_SECRET must be configured for non-development deployments")
-    Base.metadata.create_all(bind=engine)
-    columns={c["name"] for c in inspect(engine).get_columns("risk_settings")}
-    additions={"portfolio_nav":"FLOAT NOT NULL DEFAULT 100000","risk_profile":"VARCHAR(20) NOT NULL DEFAULT 'moderate'","max_leverage_pct":"FLOAT NOT NULL DEFAULT 100","asset_class_limits":"JSON NOT NULL DEFAULT '{}'","volatility_tolerance":"VARCHAR(20) NOT NULL DEFAULT 'moderate'","liquidity_floor_usd":"FLOAT NOT NULL DEFAULT 0","investment_horizon_months":"INTEGER NOT NULL DEFAULT 12"}
-    with engine.begin() as connection:
-        for column,ddl in additions.items():
-            if column not in columns: connection.execute(text(f"ALTER TABLE risk_settings ADD COLUMN {column} {ddl}"))
-    order_columns={c["name"] for c in inspect(engine).get_columns("paper_orders")} if "paper_orders" in inspect(engine).get_table_names() else set()
-    with engine.begin() as connection:
-        if order_columns and "filled_quantity" not in order_columns: connection.execute(text("ALTER TABLE paper_orders ADD COLUMN filled_quantity FLOAT NOT NULL DEFAULT 0"))
-        if order_columns and "average_fill_price" not in order_columns: connection.execute(text("ALTER TABLE paper_orders ADD COLUMN average_fill_price FLOAT"))
+    initialize_database(Base)
 @asynccontextmanager
 async def lifespan(_app):
     initialize_storage()
