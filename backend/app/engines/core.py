@@ -7,8 +7,8 @@ from scipy.stats import linregress, norm, pearsonr, spearmanr
 from statsmodels.tsa.stattools import coint
 from statsmodels.tsa.arima.model import ARIMA
 
-VERSION = "0.3.0"
-ENGINES = ("arima", "garch", "kalman_filter", "ornstein_uhlenbeck", "moving_average", "rsi", "macd", "bollinger", "monte_carlo", "black_scholes", "pairs_trading", "gradient_boosting", "vwap", "statistical_arbitrage", "mean_reversion", "momentum", "volatility_breakout")
+VERSION = "0.4.0"
+ENGINES = ("arima", "garch", "heston", "sabr", "kalman_filter", "ornstein_uhlenbeck", "moving_average", "rsi", "macd", "bollinger", "monte_carlo", "black_scholes", "pairs_trading", "gradient_boosting", "vwap", "statistical_arbitrage", "mean_reversion", "momentum", "volatility_breakout", "market_regime")
 LEGACY_ENGINES = ("volatility_options", "cross_asset", "market_regime")
 
 def _series(values, name):
@@ -52,7 +52,7 @@ def _garch_fit(returns):
     omega,alpha,beta=map(float,fit.x); variance=np.empty(len(r)); variance[0]=sample
     for i in range(1,len(r)): variance[i]=omega+alpha*r[i-1]**2+beta*variance[i-1]
     forecast=omega+alpha*r[-1]**2+beta*variance[-1]
-    return {"omega_percent_squared":omega,"alpha":alpha,"beta":beta,"persistence":alpha+beta,"conditional_volatility_pct":float(np.sqrt(variance[-1])*np.sqrt(252)),"next_observation_volatility_pct":float(np.sqrt(forecast)),"annualized_next_volatility_pct":float(np.sqrt(forecast*252)),"log_likelihood":float(-fit.fun),"optimizer_success":bool(fit.success)}
+    return {"omega_percent_squared":omega,"alpha":alpha,"beta":beta,"persistence":alpha+beta,"conditional_volatility_pct":float(np.sqrt(variance[-1])*np.sqrt(252)),"conditional_volatility_series_pct":(np.sqrt(variance)*np.sqrt(252)).tolist(),"next_observation_volatility_pct":float(np.sqrt(forecast)),"annualized_next_volatility_pct":float(np.sqrt(forecast*252)),"log_likelihood":float(-fit.fun),"optimizer_success":bool(fit.success)}
 
 def _bsm(spot, strike, t, rate, vol):
     d1=(math.log(spot/strike)+(rate+.5*vol*vol)*t)/(vol*math.sqrt(t)); d2=d1-vol*math.sqrt(t)
@@ -71,7 +71,7 @@ def _kalman_hedge(y, x, delta=1e-4, observation=1e-3):
         out.append(float(beta))
     return np.asarray(out)
 
-def _two_state_hmm(returns, iterations=40):
+def _two_state_hmm(returns, iterations=40, return_history=False):
     """Small Gaussian two-state HMM fitted by deterministic Baum-Welch EM."""
     obs=np.asarray(returns,dtype=float)
     center=float(np.median(obs)); scale=max(float(np.std(obs)),1e-8)
@@ -92,7 +92,7 @@ def _two_state_hmm(returns, iterations=40):
         initial=gamma[0]; transition=xi/np.maximum(xi.sum(axis=1,keepdims=True),1e-12)
         for k in range(2):
             weights=gamma[:,k]; total=max(weights.sum(),1e-12); means[k]=np.sum(weights*obs)/total; variances[k]=max(np.sum(weights*(obs-means[k])**2)/total,1e-12)
-    return gamma[-1],transition,means,variances
+    return (gamma,transition,means,variances) if return_history else (gamma[-1],transition,means,variances)
 
 def _boosted_stumps(features, targets, iterations=60, learning_rate=.05):
     """Small deterministic squared-error gradient booster using depth-one regression trees."""
@@ -124,7 +124,37 @@ def _boosted_predict(features, baseline, stumps, learning_rate=.05):
 
 def calculate(engine: str, data: dict, params: dict|None=None):
     p=params or {}; x=_series(data.get("prices",[]),"prices"); returns=np.diff(np.log(x)); result={}
-    if engine=="arima":
+    if engine=="heston":
+        # Full-truncation Euler Heston scenarios. Parameters are user scenarios, not a fitted options calibration.
+        kappa=float(p.get("kappa",2.0)); theta=float(p.get("theta",max(float(np.var(returns))*252,1e-6))); xi=float(p.get("xi",0.5)); rho=float(p.get("rho",-0.7)); v0=float(p.get("v0",max(float(np.var(returns))*252,1e-6)))
+        horizon=int(p.get("horizon",30)); paths=int(p.get("paths",500)); seed=int(p.get("seed",7))
+        if kappa<=0 or theta<=0 or xi<0 or not -1<=rho<=1 or v0<=0: raise ValueError("Heston requires kappa, theta and v0 > 0, xi >= 0, and rho between -1 and 1")
+        if not 1<=horizon<=365 or not 100<=paths<=10000: raise ValueError("Heston horizon must be 1-365 observations and paths 100-10000")
+        dt=1/252; rng=np.random.default_rng(seed); variance=np.full(paths,v0); spot=np.full(paths,float(x[-1])); vol_steps=[]; price_steps=[]
+        for _ in range(horizon):
+            z1=rng.standard_normal(paths); z2=rho*z1+math.sqrt(max(1-rho*rho,0))*rng.standard_normal(paths)
+            v_pos=np.maximum(variance,0); variance=np.maximum(variance+kappa*(theta-v_pos)*dt+xi*np.sqrt(v_pos*dt)*z2,0)
+            spot=spot*np.exp(-.5*v_pos*dt+np.sqrt(v_pos*dt)*z1); vol_steps.append(np.sqrt(variance*252)); price_steps.append(spot.copy())
+        vol_steps=np.asarray(vol_steps); price_steps=np.asarray(price_steps)
+        result={"method":"Heston full-truncation Euler Monte Carlo; scenario parameters are not calibrated","calibration_status":"NOT_CALIBRATED","current_annualized_volatility_pct":float(np.sqrt(v0)*100),"long_run_annualized_volatility_pct":float(np.sqrt(theta)*100),"mean_reversion_speed":kappa,"volatility_of_variance":xi,"return_variance_correlation":rho,"forecast_horizon_observations":horizon,"scenario_paths":paths,"forecast_volatility_median_pct":(np.median(vol_steps,axis=1)*100).tolist(),"forecast_volatility_p05_pct":(np.quantile(vol_steps,.05,axis=1)*100).tolist(),"forecast_volatility_p95_pct":(np.quantile(vol_steps,.95,axis=1)*100).tolist(),"terminal_price_median":float(np.median(price_steps[-1])),"terminal_price_p05":float(np.quantile(price_steps[-1],.05)),"terminal_price_p95":float(np.quantile(price_steps[-1],.95)),"seed":seed,"interpretation":"Stochastic volatility scenario only. Price paths are not directional forecasts; calibration to option prices was not performed."}
+    elif engine=="sabr":
+        forward=float(data.get("forward",x[-1])); expiry=float(p.get("expiry_years",data.get("expiry_years",0.5))); alpha=float(p.get("alpha",0.3)); beta=float(p.get("beta",0.5)); rho=float(p.get("rho",-0.2)); nu=float(p.get("nu",0.5)); count=int(p.get("strikes",21)); width=float(p.get("strike_width",0.3))
+        if forward<=0 or expiry<=0 or alpha<=0 or nu<0 or not 0<=beta<=1 or not -0.999<rho<0.999: raise ValueError("SABR requires positive forward, expiry and alpha; beta 0-1, nu >= 0 and rho strictly between -0.999 and 0.999")
+        if not 5<=count<=101 or not 0<width<=1: raise ValueError("SABR strike count must be 5-101 and strike width between 0 and 1")
+        strikes=np.linspace(forward*(1-width),forward*(1+width),count); vols=[]
+        for strike in strikes:
+            if abs(forward-strike)<1e-10:
+                fk=forward**(1-beta); correction=(1-beta)**2*alpha**2/(24*fk**2)+rho*beta*nu*alpha/(4*fk)+(2-3*rho**2)*nu**2/24
+                vol=alpha/fk*(1+correction*expiry)
+            else:
+                fk=(forward*strike)**((1-beta)/2); log_fk=math.log(forward/strike); z=(nu/alpha)*fk*log_fk; radicand=max(1-2*rho*z+z*z,1e-15); xz=math.log((math.sqrt(radicand)+z-rho)/(1-rho)); ratio=xz/z if abs(z)>1e-8 else 1-rho*z/2+(2-3*rho*rho)*z*z/12
+                correction=(1-beta)**2*alpha**2/(24*fk*fk)+rho*beta*nu*alpha/(4*fk)+(2-3*rho*rho)*nu*nu/24
+                denom=fk*(1+(1-beta)**2*log_fk**2/24+(1-beta)**4*log_fk**4/1920)
+                vol=alpha/denom*ratio*(1+correction*expiry)
+            if not np.isfinite(vol) or vol<=0: raise ValueError("SABR produced a non-positive implied volatility for this parameter set")
+            vols.append(vol*100)
+        result={"method":"Hagan SABR lognormal implied-volatility approximation","calibration_status":"NOT_CALIBRATED_NO_OPTIONS_FEED","forward":forward,"forward_source":"Latest historical close used as a zero-carry proxy; replace with an options-market forward for research use","expiry_years":expiry,"strikes":strikes.tolist(),"sabr_implied_volatility_pct":vols,"alpha":alpha,"beta":beta,"rho":rho,"nu":nu,"observed_market_implied_volatility":None,"calibration_error":None,"interpretation":"The smile is a parameter scenario, not observed market data. No options feed is configured, so market calibration and fit statistics are unavailable."}
+    elif engine=="arima":
         if len(x)<60: raise ValueError("arima requires at least 60 price observations")
         order=p.get("order",[1,1,1])
         if not isinstance(order,(list,tuple)) or len(order)!=3: raise ValueError("order must contain p, d, q")
@@ -160,7 +190,9 @@ def calculate(engine: str, data: dict, params: dict|None=None):
         if not 0<learning_rate<=.5 or not 5<=iterations<=300: raise ValueError("learning_rate must be in (0, 0.5] and estimators 5-300")
         baseline,stumps=_boosted_stumps(features[:split],target[:split],iterations,learning_rate); test_prediction=_boosted_predict(features[split:],baseline,stumps,learning_rate); test_error=test_prediction-target[split:]
         full_baseline,full_stumps=_boosted_stumps(features,target,iterations,learning_rate); next_feature=returns[-5:][::-1].reshape(1,-1); next_return=float(_boosted_predict(next_feature,full_baseline,full_stumps,learning_rate)[0]); direction="long" if next_return>0 else "short" if next_return<0 else "neutral"
-        result={"validation_type":"chronological_holdout","training_observations":split,"test_observations":len(target)-split,"estimators_used":len(full_stumps),"learning_rate":learning_rate,"out_of_sample_rmse":float(np.sqrt(np.mean(test_error**2))),"out_of_sample_mae":float(np.mean(np.abs(test_error))),"out_of_sample_directional_accuracy_pct":float(np.mean(np.sign(test_prediction)==np.sign(target[split:]))*100),"next_return_estimate_pct":next_return*100,"next_price_estimate":float(x[-1]*math.exp(next_return)),"signal_direction":direction,"method":"Deterministic squared-error gradient boosting with depth-one regression stumps on five lagged log returns; reports chronological holdout error."}
+        importance=np.zeros(features.shape[1]);
+        for column,_,_,_ in full_stumps: importance[column]+=1
+        result={"validation_type":"chronological_holdout","training_observations":split,"test_observations":len(target)-split,"estimators_used":len(full_stumps),"learning_rate":learning_rate,"out_of_sample_rmse":float(np.sqrt(np.mean(test_error**2))),"out_of_sample_mae":float(np.mean(np.abs(test_error))),"out_of_sample_directional_accuracy_pct":float(np.mean(np.sign(test_prediction)==np.sign(target[split:]))*100),"holdout_actual_return_pct":(target[split:]*100).tolist(),"holdout_predicted_return_pct":(test_prediction*100).tolist(),"feature_importance_lag_1_to_5":(importance/max(importance.sum(),1)).tolist(),"next_return_estimate_pct":next_return*100,"next_price_estimate":float(x[-1]*math.exp(next_return)),"signal_direction":direction,"method":"Deterministic squared-error gradient boosting with depth-one regression stumps on five lagged log returns; reports chronological holdout error."}
     elif engine=="moving_average":
         fast=_window(p.get("fast_window"),20,len(x)); slow=_window(p.get("slow_window"),50,len(x))
         if fast>=slow: raise ValueError("fast_window must be smaller than slow_window")
@@ -236,9 +268,9 @@ def calculate(engine: str, data: dict, params: dict|None=None):
         rx=np.diff(np.log(x)); ry=np.diff(np.log(y)); corr=float(pearsonr(rx,ry).statistic) if np.std(rx)>0 and np.std(ry)>0 else None; reg=linregress(ry,rx) if np.std(ry)>0 else None
         result={"correlation":corr,"correlation_status":"calculated" if corr is not None else "undefined_constant_returns","relative_return":float(np.log(x[-1]/x[0])-np.log(y[-1]/y[0])),"basis":float(x[-1]-y[-1]),"basis_pct_of_peer":float((x[-1]-y[-1])/y[-1]),"yield_spread_bps":float((float(data["yield_a"])-float(data["yield_b"]))*10000) if data.get("yield_a") is not None and data.get("yield_b") is not None else None,"factor_beta":float(reg.slope) if reg else None,"factor_alpha_per_observation":float(reg.intercept) if reg else None,"signal_direction":"long_relative" if x[-1]/x[0]>y[-1]/y[0] else "short_relative"}
     elif engine=="market_regime":
-        w=_window(p.get("window"),20,len(returns)); recent=float(np.std(returns[-w:],ddof=1)*np.sqrt(252)); hist=float(np.std(returns,ddof=1)*np.sqrt(252)); posterior,transition,means,variances=_two_state_hmm(returns)
-        stress=int(np.argmax(variances)); calm=1-stress; state=int(np.argmax(posterior)); transition_probs=(posterior@transition).tolist()
-        result={"annualized_volatility":recent,"historical_volatility":hist,"regime":"high_volatility" if state==stress else "normal_volatility","method":"two_state_gaussian_hmm_on_returns","state_posterior":{"calm":float(posterior[calm]),"high_volatility":float(posterior[stress])},"next_observation_transition_probability":{"calm":float(transition_probs[calm]),"high_volatility":float(transition_probs[stress])},"state_transition_matrix":transition.tolist(),"state_annualized_volatility":{"calm":float(math.sqrt(variances[calm]*252)),"high_volatility":float(math.sqrt(variances[stress]*252))},"change_point_score":float(abs(np.mean(returns[-w:])-np.mean(returns[:-w]))/(np.std(returns,ddof=1)+1e-12)) if len(returns)>2*w else None}
+        w=_window(p.get("window"),20,len(returns)); recent=float(np.std(returns[-w:],ddof=1)*np.sqrt(252)); hist=float(np.std(returns,ddof=1)*np.sqrt(252)); posterior_history,transition,means,variances=_two_state_hmm(returns,return_history=True)
+        stress=int(np.argmax(variances)); calm=1-stress; posterior=posterior_history[-1]; state=int(np.argmax(posterior)); transition_probs=(posterior@transition).tolist(); regimes=np.argmax(posterior_history,axis=1)
+        result={"annualized_volatility":recent,"historical_volatility":hist,"regime":"high_volatility" if state==stress else "normal_volatility","high_volatility_state":stress,"method":"two_state_gaussian_hmm_on_returns","state_posterior":{"calm":float(posterior[calm]),"high_volatility":float(posterior[stress])},"historical_regime_states":regimes.astype(int).tolist(),"historical_regime_labels":["high_volatility" if int(value)==stress else "normal_volatility" for value in regimes],"historical_state_probabilities":posterior_history.tolist(),"state_transition_matrix":transition.tolist(),"next_observation_transition_probability":{"calm":float(transition_probs[calm]),"high_volatility":float(transition_probs[stress])},"state_annualized_volatility":{"calm":float(math.sqrt(variances[calm]*252)),"high_volatility":float(math.sqrt(variances[stress]*252))},"state_mean_return_per_observation":{"calm":float(means[calm]),"high_volatility":float(means[stress])},"estimated_duration_observations":{"calm":float(1/max(1-transition[calm,calm],1e-12)),"high_volatility":float(1/max(1-transition[stress,stress],1e-12))},"diagnostics":{"iterations":40,"likelihood":"not exposed by current Baum-Welch implementation"},"change_point_score":float(abs(np.mean(returns[-w:])-np.mean(returns[:-w]))/(np.std(returns,ddof=1)+1e-12)) if len(returns)>2*w else None}
     elif engine=="volatility_breakout":
         highs=np.asarray(data.get("highs",[]),dtype=float); lows=np.asarray(data.get("lows",[]),dtype=float)
         if highs.ndim!=1 or lows.ndim!=1 or len(highs)!=len(x) or len(lows)!=len(x) or not np.isfinite(highs).all() or not np.isfinite(lows).all() or (highs<=0).any() or (lows<=0).any(): raise ValueError("highs and lows must be positive finite series aligned with prices")

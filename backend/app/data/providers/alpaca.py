@@ -4,7 +4,8 @@ import json
 import os
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http import fetch_json
 
 REST = "https://data.alpaca.markets/v2"
 INTERVALS = {"1m": ("1Min", 60), "5m": ("5Min", 300), "15m": ("15Min", 900), "1h": ("1Hour", 3600), "4h": ("1Hour", 3600), "1d": ("1Day", 86400), "1w": ("1Day", 86400)}
@@ -29,8 +30,7 @@ def _get(path: str, params: dict) -> dict:
     key,secret=credentials() or ("","")
     request = Request(url, headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret, "Accept": "application/json"})
     try:
-        with urlopen(request, timeout=10) as response:
-            return json.loads(response.read())
+        return fetch_json(request, timeout=10)
     except HTTPError as exc:
         if exc.code in (401, 403): raise RuntimeError("Equity data credentials are invalid or the selected feed is not entitled") from None
         raise RuntimeError(f"Equity data request failed ({exc.code})") from None

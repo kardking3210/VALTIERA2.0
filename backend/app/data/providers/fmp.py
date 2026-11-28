@@ -4,7 +4,8 @@ import json
 import os
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http import fetch_json
 
 BASE = "https://financialmodelingprep.com/stable"
 PROVIDERS = {
@@ -36,11 +37,17 @@ def fetch_bars(asset_class: str, symbol: str, timeframe: str = "1d", limit: int 
     params = urlencode({"symbol": symbol, "from": start.isoformat(), "to": end.isoformat(), "apikey": key})
     request = Request(f"{BASE}/historical-price-eod/full?{params}", headers={"Accept": "application/json", "User-Agent": "VALTIERA-local-research/1.0"})
     try:
-        with urlopen(request, timeout=15) as response:
-            rows = json.loads(response.read())
+        rows = fetch_json(request, timeout=15)
     except HTTPError as exc:
         if exc.code in (401, 403):
-            raise RuntimeError("FMP rejected the key or this symbol is outside your plan's data coverage") from None
+            body=exc.read(2048).decode("utf-8",errors="replace")
+            try:
+                detail=json.loads(body)
+                detail=detail.get("Error Message") or detail.get("message") or detail.get("error") or ""
+            except (ValueError,AttributeError): detail=""
+            detail=str(detail).replace(key,"[redacted]")[:240]
+            reason=f": {detail}" if detail else ""
+            raise RuntimeError(f"FMP denied this request ({exc.code}); check the API key, symbol format, endpoint and plan entitlement{reason}") from None
         raise RuntimeError(f"FMP history request failed ({exc.code})") from None
     except (URLError, TimeoutError, OSError, json.JSONDecodeError):
         raise RuntimeError("FMP history is temporarily unavailable") from None

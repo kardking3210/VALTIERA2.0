@@ -6,6 +6,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from .http import fetch_json
 
 BASE_URL = "https://data-api.binance.vision/api/v3/klines"
 INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
@@ -31,8 +32,7 @@ def fetch_candles(symbol: str, timeframe: str = "1d", limit: int = 500) -> dict:
     query = urlencode({"symbol": normalized, "interval": timeframe, "limit": min(limit + 1, 1000)})
     request = Request(f"{BASE_URL}?{query}", headers={"User-Agent": "VALTIERA-Research/1.0", "Accept": "application/json"})
     try:
-        with urlopen(request, timeout=8) as response:
-            rows = json.loads(response.read())
+        rows = fetch_json(request, timeout=8)
     except HTTPError as exc:
         raise RuntimeError(f"Public candle request failed ({exc.code})") from None
     except (URLError, TimeoutError, OSError, json.JSONDecodeError):

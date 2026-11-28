@@ -17,7 +17,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 from .auth import bearer, current_user, hash_password, issue_token, verify_password
 from .db import Base, SessionLocal, get_db, initialize_storage as initialize_database
-from .engines.core import calculate, ENGINES, _exponential, _garch_fit, _wilder_rsi
+from .engines.core import calculate, ENGINES, VERSION as ENGINE_VERSION, _exponential, _garch_fit, _wilder_rsi
 from .data.providers.binance import fetch_candles, latest_quote, top_of_book as binance_book
 from .data.providers import alpaca as alpaca_provider
 from .data.providers import fmp as fmp_provider
@@ -486,8 +486,56 @@ def market_summary(data:MarketSummaryRequest,request:Request):
 
 @app.get("/engines")
 def engines():
-    descriptions={"arima":"ARIMA on log price levels with a conditional interval","garch":"Gaussian GARCH(1,1) maximum likelihood fit","kalman_filter":"Scalar local-level filter for log prices","ornstein_uhlenbeck":"Discrete log-price mean-reversion fit","moving_average":"SMA/EMA crossover","rsi":"Wilder RSI momentum","macd":"Exponential trend convergence/divergence","bollinger":"Rolling mean and standard-deviation bands","monte_carlo":"Seeded geometric Brownian motion scenarios","black_scholes":"European option theoretical baseline and analytical Greeks","gradient_boosting":"Deterministic boosted regression stumps with chronological holdout","vwap":"Volume weighted average price","statistical_arbitrage":"Cointegration and spread diagnostics","pairs_trading":"OLS hedge ratio and spread Z-score","mean_reversion":"Rolling Z-score and conditional half-life","momentum":"Volatility adjusted time-series momentum","volatility_breakout":"Prior range and true-range breakout"}
-    return {"engines":[{"id":e,"status":"CALCULATION AVAILABLE","version":"0.3.0","description":descriptions[e]} for e in ENGINES],"note":"Calculation code is available for caller supplied observations. No licensed equity or commodity feed is configured."}
+    descriptions={"arima":"ARIMA on log price levels with a conditional interval","garch":"Gaussian GARCH(1,1) maximum likelihood fit and conditional volatility series","heston":"Full-truncation Euler Monte Carlo stochastic-volatility scenarios; not calibrated","sabr":"Hagan SABR implied-volatility smile from supplied scenario parameters; no market calibration","market_regime":"Two-state Gaussian HMM with Baum-Welch regime and transition estimates","kalman_filter":"Scalar local-level filter for log prices","ornstein_uhlenbeck":"Discrete log-price mean-reversion fit","moving_average":"SMA/EMA crossover","rsi":"Wilder RSI momentum","macd":"Exponential trend convergence/divergence","bollinger":"Rolling mean and standard-deviation bands","monte_carlo":"Seeded geometric Brownian motion scenarios","black_scholes":"European option theoretical baseline and analytical Greeks","gradient_boosting":"Deterministic boosted regression stumps with chronological holdout","vwap":"Volume weighted average price","statistical_arbitrage":"Cointegration and spread diagnostics","pairs_trading":"OLS hedge ratio and spread Z-score","mean_reversion":"Rolling Z-score and conditional half-life","momentum":"Volatility adjusted time-series momentum","volatility_breakout":"Prior range and true-range breakout"}
+    return {"engines":[{"id":e,"status":"CALCULATION AVAILABLE","version":ENGINE_VERSION,"description":descriptions[e]} for e in ENGINES],"note":"Engine availability means calculation code exists; data coverage is provider-dependent. Calibration, options quotes, news ingestion and external ML inference are not included unless explicitly stated."}
+
+@app.post("/engines/{engine_name}/summarize")
+def summarize_engine_result(engine_name:str,request:RunRequest,user:User=Depends(current_user),db:Session=Depends(get_db)):
+    """Explain only a successful, structured output from a research engine; never generate missing metrics."""
+    if engine_name not in ENGINES: raise HTTPException(404,"Unknown research engine")
+    result=request.data.get("result")
+    if not isinstance(result,dict) or result.get("engine")!=engine_name or not isinstance(result.get("metrics"),dict):
+        raise HTTPException(422,"Provide the latest successful analysis result for this engine.")
+    execution_id=result.get("execution_id")
+    if not isinstance(execution_id,int): raise HTTPException(422,"Run and save a successful analysis before requesting its summary.")
+    saved=db.query(EngineRun).filter_by(id=execution_id,user_id=user.id,engine=engine_name).first()
+    if not saved: raise HTTPException(404,"Saved analysis not found for this account.")
+    result={**saved.result,"execution_id":saved.id}
+    metrics=result["metrics"]
+    def compact(value):
+        if isinstance(value,dict): return {str(key):compact(item) for key,item in value.items()}
+        if isinstance(value,list):
+            if len(value)<=40: return [compact(item) for item in value]
+            numbers=[float(item) for item in value if isinstance(item,(int,float)) and np.isfinite(item)]
+            summary={"observation_count":len(value),"first_values":value[:5],"last_values":value[-5:]}
+            if numbers: summary.update(minimum=min(numbers),maximum=max(numbers))
+            return summary
+        return value
+    compact_metrics=compact(metrics)
+    evidence={key:value for key,value in compact_metrics.items() if value is not None}
+    limitations=[str(metrics[k]) for k in ("interpretation","method") if isinstance(metrics.get(k),str)]
+    simple=f"{engine_name.replace('_',' ').title()} completed on {result.get('observations','unknown')} historical observations. The returned measurements are {json.dumps(evidence,allow_nan=False)[:1800]}. These describe the supplied sample and model assumptions; they do not establish a future outcome."
+    technical=f"Engine: {engine_name}; version: {result.get('model_version','unknown')}; observations: {result.get('observations','unknown')}; data status: {result.get('data_status','unspecified')}. Structured metrics: {json.dumps(compact_metrics,allow_nan=False)[:5000]}. Limitations: {' '.join(limitations) or 'Interpret using the documented method and input assumptions.'}"
+    provider="deterministic structured explanation"; status="FALLBACK_NO_API_KEY"
+    api_key=os.getenv("GEMINI_API_KEY","").strip()
+    if api_key:
+        prompt=("Explain the supplied completed quantitative analysis in two sections named Simple Explanation and Technical Explanation. "
+                "Use only facts and numbers in the JSON. Do not invent forecasts, probabilities, calibration, validation, data freshness, or recommendations. "
+                "State material limitations and what could invalidate the interpretation. If a metric is null or unavailable, say so.\n"+json.dumps({"engine":engine_name,"result":{**result,"metrics":compact_metrics}},separators=(",",":"),allow_nan=False)[:12000])
+        payload={"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.1,"maxOutputTokens":700}}
+        model_name=os.getenv("GEMINI_MODEL","gemini-3.5-flash-lite").strip()
+        req=URLRequest(f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model_name,safe='')}:generateContent",data=json.dumps(payload).encode(),headers={"Content-Type":"application/json","x-goog-api-key":api_key},method="POST")
+        try:
+            with urlopen(req,timeout=18) as response: generated=json.loads(response.read())
+            text_out="\n".join(part.get("text","").strip() for part in generated["candidates"][0]["content"]["parts"] if part.get("text"))
+            if text_out:
+                provider=model_name; status="AVAILABLE"
+                split_at=text_out.lower().find("technical explanation")
+                simple=text_out[:split_at].replace("Simple Explanation", "", 1).strip(" *:\n") if split_at>=0 else text_out
+                technical=text_out[split_at+len("technical explanation"):].strip(" *:\n") if split_at>=0 else text_out
+            else: status="FALLBACK_EMPTY_RESPONSE"
+        except (HTTPError,URLError,TimeoutError,OSError,ValueError,KeyError,IndexError,TypeError): status="FALLBACK_API_UNAVAILABLE"
+    return {"engine":engine_name,"simple_explanation":simple,"technical_explanation":technical,"provider":provider,"status":status,"source_execution_id":result.get("execution_id"),"disclosure":"Explanation is based only on the submitted completed result. It does not verify the source data, model assumptions, or future performance."}
 
 @app.post("/intelligence/consensus")
 def intelligence_consensus(req:IntelligenceRequest,user:User=Depends(current_user),db:Session=Depends(get_db)):
@@ -575,7 +623,7 @@ def _walk_forward_refit(req:BacktestRequest,include_walk_forward:bool):
         train_end=int(edges[fold_index]); test_end=int(edges[fold_index+1])
         if train_end<80 or test_end-train_end<10: continue
         train_update={"prices":req.prices[:train_end],"parameters":req.parameters}
-        for name in ("peer_prices","volumes","highs","lows"):
+        for name in ("peer_prices","volumes","highs","lows","benchmark_prices"):
             values=getattr(req,name)
             if values is not None: train_update[name]=values[:train_end]
         best=None
@@ -589,7 +637,7 @@ def _walk_forward_refit(req:BacktestRequest,include_walk_forward:bool):
             except (ValueError,TypeError,OverflowError): continue
         if best is None: continue
         params=best[1]; full_update={"prices":req.prices[:test_end],"parameters":params}
-        for name in ("peer_prices","volumes","highs","lows"):
+        for name in ("peer_prices","volumes","highs","lows","benchmark_prices"):
             values=getattr(req,name)
             if values is not None: full_update[name]=values[:test_end]
         try: simulated=evaluate_backtest(req.model_copy(update=full_update),include_walk_forward=False)

@@ -12,6 +12,7 @@ Default local API URL: `http://127.0.0.1:8000`. Authenticated endpoints require 
 | WS | `/ws/market/{crypto\|equity}/{symbol}/{timeframe}` | No | Binance public kline stream or authenticated Alpaca IEX trade/bar stream |
 | POST | `/market-data/summary` | No | Computed historical metrics plus configured explanation/fallback |
 | POST | `/engines/{engine_name}/run` | Yes | Run deterministic research calculation over submitted data |
+| POST | `/engines/{engine_name}/summarize` | Yes | Explain a saved run from the authenticated user's database record; Gemini is optional, with a deterministic fallback |
 | POST | `/backtests` | Yes | Persist historical simulation, cost assumptions, holdout metrics, walk-forward folds and input fingerprint |
 | GET | `/backtests` | Yes | Read saved simulations |
 | GET | `/paper/account` | Yes | Read the user's separate simulated cash, positions and order history |

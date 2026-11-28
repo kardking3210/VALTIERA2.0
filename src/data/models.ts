@@ -14,6 +14,9 @@ export type Model = {
 };
 
 export const models: Model[] = [
+  { id: 'heston', number: 'SV-01', name: 'Heston Stochastic Volatility', short: 'HESTON', family: 'Stochastic volatility', description: 'Simulate correlated price and variance paths under the Heston stochastic-volatility process.', method: 'Full-truncation Euler Monte Carlo with user-editable scenario parameters; no option calibration is claimed.' },
+  { id: 'sabr', number: '02', name: 'SABR Implied Volatility Smile', short: 'SABR', family: 'Options volatility', description: 'Calculate a strike-dependent implied-volatility smile from the Hagan SABR approximation.', method: 'Hagan lognormal implied-volatility approximation. Market calibration is unavailable without an options quote surface.' },
+  { id: 'market_regime', number: 'HMM', name: 'HMM Market Regime Detection', short: 'HMM REGIME', family: 'Regime detection', description: 'Fit a two-state Gaussian hidden Markov model to historical log returns and infer regime probabilities.', method: 'Deterministic Baum–Welch EM with filtered posterior probabilities and a fitted state transition matrix.' },
   { id: 'arima', number: '01', name: 'ARIMA Forecast', short: 'ARIMA', family: 'Statistical', description: 'Fit an autoregressive integrated moving-average model to historical log prices.', method: 'Statsmodels ARIMA(p,d,q) with a conditional 95% interval and explicitly reported convergence status.', backtestable: false },
   { id: 'garch', number: '02', name: 'GARCH Volatility Forecast', short: 'GARCH(1,1)', family: 'Statistical', description: 'Estimate conditional variance persistence and the next observation volatility.', method: 'Gaussian GARCH(1,1) maximum-likelihood fit with a stationarity constraint; fit errors are reported.', backtestable: true },
   { id: 'kalman_filter', number: '03', name: 'Kalman Filter', short: 'KALMAN', family: 'Statistical', description: 'Estimate a changing latent price level while accounting for observation noise.', method: 'Scalar local-level Kalman filter over log prices with explicit process and observation variances.', backtestable: false },
@@ -32,3 +35,10 @@ export const models: Model[] = [
   { id: 'black_scholes', number: '16', name: 'Black–Scholes', short: 'BLACK–SCHOLES', family: 'Derivatives', description: 'Calculate a European option theoretical baseline and analytical Greeks from entered assumptions.', method: 'Black–Scholes call and put prices, delta, gamma, vega and theta from spot, strike, expiry, rate and volatility.', needsOptions: true, backtestable: false },
   { id: 'gradient_boosting', number: '17', name: 'Gradient Boosting', short: 'BOOSTING', family: 'Machine learning', description: 'Evaluate boosted decision stumps on lagged returns with a chronological holdout.', method: 'Deterministic squared-error gradient boosting, five return lags and reported out-of-sample error.', backtestable: false },
 ];
+
+export const researchWorkspaces = [
+  { id: 'stochastic', title: 'Stochastic Volatility Models', description: 'Heston paths and GARCH volatility forecasting.', available: ['heston', 'garch'] },
+  { id: 'sabr', title: 'SABR Model', description: 'Strike-based implied volatility smile scenarios.', available: ['sabr'] },
+  { id: 'hmm', title: 'Hidden Markov Models', description: 'Historical market states and transition probabilities.', available: ['market_regime'] },
+  { id: 'ml_nlp', title: 'Advanced Machine Learning & NLP', description: 'Time-series ML and document analysis.', available: ['gradient_boosting'], unavailable: ['XGBoost', 'Random Forest', 'LSTM', 'Transformer-based Time-Series Models', 'Ensemble Models', 'FinBERT', 'Sentiment Analysis', 'Named Entity Recognition', 'Topic Detection'] },
+] as const;

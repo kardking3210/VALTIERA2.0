@@ -1,5 +1,6 @@
 import os
 os.environ["DATABASE_URL"] = "sqlite:///./test_valtiera.db"
+from urllib.error import HTTPError
 
 import numpy as np
 import pytest
@@ -10,11 +11,13 @@ from sqlalchemy.orm import Session
 from app.auth import current_user, hash_password, issue_token, verify_password
 from app.db import Base, SessionLocal, engine
 from app.engines.core import ENGINES, calculate
+from app.data.providers import http as provider_http
 from app.main import (app, initialize_storage, health, run, RunRequest,
                       RiskRequest, update_risk, risk_view, PositionRequest, ExposureCheckRequest, check_proposed_exposure, add_position,
                       portfolio, delete_position, BacktestRequest, backtest, backtest_history,
                       JobRequest, enqueue_research, research_job,
-                      change_password, PasswordChangeRequest, intelligence_consensus, IntelligenceRequest, logout)
+                      change_password, PasswordChangeRequest, intelligence_consensus, IntelligenceRequest, logout,
+                      summarize_engine_result)
 from app.models import User, EngineRun, Backtest as BacktestRow, AuditLog, RiskSettings
 from app.worker import process_one
 
@@ -76,6 +79,63 @@ def test_momentum_mean_reversion_and_hmm_metrics_are_real(prices):
     assert mean["estimated_half_life_observations"] is not None
     assert regime["method"]=="two_state_gaussian_hmm_on_returns"
     assert abs(sum(regime["state_posterior"].values())-1)<1e-6
+    assert len(regime["historical_regime_labels"])==len(prices)-1
+    assert len(regime["state_transition_matrix"])==2
+
+def test_heston_scenario_paths_are_deterministic_and_labelled(prices):
+    params={"horizon":8,"paths":200,"seed":19,"v0":.04,"theta":.06,"kappa":1.5,"xi":.35,"rho":-.6}
+    first=calculate("heston",{"prices":prices},params)["metrics"]
+    second=calculate("heston",{"prices":prices},params)["metrics"]
+    assert first["calibration_status"]=="NOT_CALIBRATED"
+    assert len(first["forecast_volatility_median_pct"])==8
+    assert first["forecast_volatility_median_pct"]==second["forecast_volatility_median_pct"]
+    assert np.all(np.asarray(first["forecast_volatility_p05_pct"])<=np.asarray(first["forecast_volatility_p95_pct"]))
+
+def test_sabr_smile_is_parameter_scenario_not_market_calibration(prices):
+    result=calculate("sabr",{"prices":prices,"forward":float(prices[-1])},{"expiry_years":.5,"strikes":15})["metrics"]
+    assert len(result["strikes"])==15
+    assert len(result["sabr_implied_volatility_pct"])==15
+    assert all(value>0 and np.isfinite(value) for value in result["sabr_implied_volatility_pct"])
+    assert result["calibration_status"]=="NOT_CALIBRATED_NO_OPTIONS_FEED"
+    assert result["observed_market_implied_volatility"] is None
+
+def test_sabr_rejects_invalid_parameters(prices):
+    with pytest.raises(ValueError,match="beta"):
+        calculate("sabr",{"prices":prices},{"beta":1.5})
+
+def test_result_summary_uses_only_the_latest_structured_output(monkeypatch,user,db):
+    monkeypatch.delenv("GEMINI_API_KEY",raising=False)
+    result={"engine":"heston","model_version":"test","observations":120,"metrics":{"calibration_status":"NOT_CALIBRATED","forecast_volatility_median_pct":[21.0,22.0],"interpretation":"Scenario only."}}
+    record=EngineRun(user_id=user.id,engine="heston",model_version="test",result=result); db.add(record); db.commit(); db.refresh(record)
+    summary=summarize_engine_result("heston",RunRequest(data={"result":{**result,"execution_id":record.id}}),user,db)
+    assert summary["status"]=="FALLBACK_NO_API_KEY"
+    assert "NOT_CALIBRATED" in summary["simple_explanation"]
+    assert "21.0" in summary["technical_explanation"]
+    with pytest.raises(HTTPException) as error:
+        summarize_engine_result("sabr",RunRequest(data={"result":result}),user,db)
+    assert error.value.status_code==422
+
+def test_provider_http_retries_transient_but_never_access_denied(monkeypatch):
+    calls=[]
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*args): return False
+        def read(self): return b'{"ok":true}'
+    def transient_then_ok(request,timeout):
+        calls.append(1)
+        if len(calls)==1: raise HTTPError("https://provider.invalid",503,"busy",{},None)
+        return Response()
+    monkeypatch.setattr(provider_http,"urlopen",transient_then_ok)
+    monkeypatch.setattr(provider_http.time,"sleep",lambda _:None)
+    assert provider_http.fetch_json(object())=={"ok":True}
+    assert len(calls)==2
+    calls.clear()
+    def forbidden(request,timeout):
+        calls.append(1)
+        raise HTTPError("https://provider.invalid",403,"forbidden",{},None)
+    monkeypatch.setattr(provider_http,"urlopen",forbidden)
+    with pytest.raises(HTTPError): provider_http.fetch_json(object())
+    assert len(calls)==1
 
 def test_kalman_pairs_and_cross_asset_factor_metrics(prices):
     x=np.asarray(prices); peer=(80*np.exp(.7*np.log(x/100)+.01*np.sin(np.arange(len(x))/4))).tolist()
@@ -149,6 +209,8 @@ def test_personalized_risk_limits_include_asset_allocation_and_leverage(db,user)
     assert any("asset-class" in w for w in check["warnings"])
 
 def test_backtest_is_lagged_and_saved(db,user,prices):
+    # Walk-forward requires at least 180 observations for its initial calibration window.
+    t=np.arange(240,dtype=float); prices=(100*np.exp(.001*t+.02*np.sin(t/6))).tolist()
     req=BacktestRequest(engine="momentum",prices=prices,benchmark_prices=prices,initial_capital=10000,fee_bps=5,slippage_bps=2,position_size=.5)
     result=backtest(req,user,db)
     assert result["data_status"]=="historical_simulation"
